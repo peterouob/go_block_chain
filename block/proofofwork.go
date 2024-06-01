@@ -24,6 +24,7 @@ func (b *Block) GetBase4Nonce(nonce int64) []byte {
 		b.Data,
 		utils.ToHexint(nonce),
 		b.Target,
+		b.BackTrasactionSummary(),
 	}, []byte{})
 	return data
 }
