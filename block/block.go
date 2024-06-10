@@ -5,6 +5,7 @@ import (
 	"block_chain/utils"
 	"bytes"
 	"crypto/sha256"
+	"encoding/gob"
 	"log"
 	"time"
 )
@@ -36,10 +37,12 @@ func CreateBlock(prevhash []byte, txs []*transaction.TransAction) *Block {
 	return &block
 }
 
-func GeneisBlock() *Block {
-	tx := transaction.BaseTx([]byte("Peter Lin"))
+func GeneisBlock(address []byte) *Block {
+	tx := transaction.BaseTx(address)
 	log.Printf("Peter Lin Get Init Coin name :%s ,coin: %d \n", string(tx.Outputs[0].ToAddress), tx.Outputs[0].Value)
-	return CreateBlock([]byte{}, []*transaction.TransAction{tx})
+	genesis := CreateBlock([]byte{}, []*transaction.TransAction{tx})
+	genesis.SetHash()
+	return genesis
 }
 
 // 由於缺少第三分認證，因次是否有足夠餘額會從上次交易看
@@ -50,4 +53,22 @@ func (b *Block) BackTrasactionSummary() []byte {
 	}
 	summary := bytes.Join(txIDs, []byte{})
 	return summary
+}
+
+func (b *Block) Serialize() []byte {
+	var res bytes.Buffer
+	encoder := gob.NewEncoder(&res)
+	if err := encoder.Encode(b); err != nil {
+		return nil
+	}
+	return res.Bytes()
+}
+
+func (b *Block) DeSerialize(data []byte) *Block {
+	var block Block
+	decoder := gob.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&block); err != nil {
+		return nil
+	}
+	return &block
 }

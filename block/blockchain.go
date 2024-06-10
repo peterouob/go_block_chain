@@ -1,24 +1,200 @@
 package block
 
 import (
+	"block_chain/constoce"
 	"block_chain/transaction"
+	"block_chain/utils"
+	"bytes"
 	"encoding/hex"
+	"fmt"
 	"log"
+	"runtime"
+
+	"github.com/dgraph-io/badger"
 )
 
 type BlockChain struct {
-	Blocks []*Block
+	LastHash []byte
+	Database *badger.DB
 }
 
-func (bc *BlockChain) AddBlock(txs []*transaction.TransAction) {
-	newBlock := CreateBlock(bc.Blocks[len(bc.Blocks)-1].Hash, txs)
-	bc.Blocks = append(bc.Blocks, newBlock)
+type BlockChainIterator struct {
+	CurrentHash []byte
+	Database    *badger.DB
 }
 
-func CreateBlockChain() *BlockChain {
-	blockChain := BlockChain{}
-	blockChain.Blocks = append(blockChain.Blocks, GeneisBlock())
-	return &blockChain
+func (chain *BlockChain) Iterator() *BlockChainIterator {
+	iterator := BlockChainIterator{chain.LastHash, chain.Database}
+	return &iterator
+}
+
+func (iterator *BlockChainIterator) Next() *Block {
+	var block *Block
+	err := iterator.Database.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(iterator.CurrentHash)
+		if err != nil {
+			log.Println("Get iterator current hash error :", err)
+			return err
+		}
+		err = item.Value(func(val []byte) error {
+			block = block.DeSerialize(val)
+			return nil
+		})
+		if err != nil {
+			log.Println("Block chain vdeserialize value error :", err)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		log.Println("View database error :", err)
+		return nil
+	}
+	iterator.CurrentHash = block.PrevHash
+	return block
+}
+
+func (chain *BlockChain) BackOgPrevHash() []byte {
+	var ogprevhash []byte
+	err := chain.Database.View(func(txn *badger.Txn) error {
+		item, err := txn.Get([]byte("ogprevhash"))
+		if err != nil {
+			log.Println("get ogprevhash Error")
+			return err
+		}
+		err = item.Value(func(val []byte) error {
+			ogprevhash = val
+			return nil
+		})
+		if err != nil {
+			log.Println("Error to get item value :", err)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		log.Println("Database View error :", err)
+		return nil
+	}
+	return ogprevhash
+}
+func InitBlockChain(address []byte) *BlockChain {
+	var lastHash []byte
+	if utils.FileExsit(constoce.BCFile) {
+		fmt.Println("block chain is already exist")
+		runtime.Goexit()
+	}
+
+	opts := badger.DefaultOptions(constoce.BCPath)
+	opts.Logger = nil
+
+	db, err := badger.Open(opts)
+	if err != nil {
+		log.Println("Have Error on Open DB :", err)
+		return nil
+	}
+
+	err = db.Update(func(txn *badger.Txn) error {
+		genesis := GeneisBlock(address)
+		fmt.Println("Genesis Create")
+		if err := txn.Set(genesis.Hash, genesis.Serialize()); err != nil {
+			log.Println("Error on Set genesis :", err)
+			return err
+		}
+		if err := txn.Set([]byte("lh"), genesis.Hash); err != nil {
+			log.Println("Error on Set genesis :", err)
+			return err
+		}
+		if err := txn.Set([]byte("ogprevhash"), genesis.PrevHash); err != nil {
+			log.Println("Error on Set genesis :", err)
+			return err
+		}
+		lastHash = genesis.Hash
+		return nil
+	})
+	if err != nil {
+		log.Println("Error on Update :", err)
+	}
+	blockchain := BlockChain{lastHash, db}
+	return &blockchain
+}
+
+func ContinueBlockChain() *BlockChain {
+	if utils.FileExsit(constoce.BCPath) == false {
+		log.Println("No blockchain found, please create one first")
+		return nil
+	}
+	var lastHash []byte
+	opts := badger.DefaultOptions(constoce.BCPath)
+	opts.Logger = nil
+	db, err := badger.Open(opts)
+	if err != nil {
+		log.Println("Cannot open the DB :", err)
+		return nil
+	}
+	err = db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get([]byte("lh"))
+		if err != nil {
+			log.Println("Get Item from ln error :", err)
+			return err
+		}
+		err = item.Value(func(val []byte) error {
+			lastHash = val
+			return nil
+		})
+		if err != nil {
+			log.Println("Error to get item Value :", err)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		log.Println("Error to update :", err)
+		return nil
+	}
+	chain := BlockChain{lastHash, db}
+	return &chain
+}
+
+func (bc *BlockChain) AddBlock(newBlock *Block) {
+	var lastHash []byte
+	err := bc.Database.View(func(txn *badger.Txn) error {
+		item, err := txn.Get([]byte("lh"))
+		if err != nil {
+			log.Println("Error to Get :", err)
+			return err
+		}
+		err = item.Value(func(val []byte) error {
+			lastHash = val
+			return nil
+		})
+		if err != nil {
+			log.Println("Error to Get Val :", err)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		log.Println("Error to View :", err)
+	}
+	if !bytes.Equal(newBlock.PrevHash, lastHash) {
+		log.Println("THIS BLOCK IS OUT OF AGE")
+		runtime.Goexit()
+	}
+
+	err = bc.Database.Update(func(txn *badger.Txn) error {
+		err := txn.Set(newBlock.Hash, newBlock.Serialize())
+		if err != nil {
+			log.Println("Set new Block error :", err)
+			return err
+		}
+		err = txn.Set([]byte("lh"), newBlock.Hash)
+		bc.LastHash = newBlock.Hash
+		return err
+	})
+	if err != nil {
+		log.Println("Update Error :", err)
+	}
 }
 
 func (bc *BlockChain) FindUnspentTransactions(address []byte) []transaction.TransAction {
@@ -26,9 +202,12 @@ func (bc *BlockChain) FindUnspentTransactions(address []byte) []transaction.Tran
 	var unSpentTxs []transaction.TransAction
 	// Key 值為交易訊息ID value為Output在該交易中的序號，此為紀錄邊例區塊鏈時已經被使用的交易訊息Output
 	spentTxs := make(map[string][]int)
+
+	iter := bc.Iterator()
+all:
 	// 遍歷交易區塊訊息
-	for idx := len(bc.Blocks) - 1; idx >= 0; idx-- {
-		block := bc.Blocks[idx]
+	for {
+		block := iter.Next()
 		for _, tx := range block.Transaction {
 			txID := hex.EncodeToString(tx.ID)
 		IterOutputs:
@@ -56,6 +235,9 @@ func (bc *BlockChain) FindUnspentTransactions(address []byte) []transaction.Tran
 					}
 				}
 			}
+		}
+		if bytes.Equal(block.PrevHash, bc.BackOgPrevHash()) {
+			break all
 		}
 	}
 	return unSpentTxs
@@ -124,8 +306,4 @@ func (bc *BlockChain) CreateTransaction(from, to []byte, amount int) (*transacti
 	tx := transaction.TransAction{ID: nil, Inputs: inputs, Outputs: outputs}
 	tx.SetID()
 	return &tx, true
-}
-
-func (bc *BlockChain) Mine(txs []*transaction.TransAction) {
-	bc.AddBlock(txs)
 }

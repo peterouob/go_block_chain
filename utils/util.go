@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"log"
+	"os"
 )
 
 func ToHexint(num int64) []byte {
@@ -13,4 +14,17 @@ func ToHexint(num int64) []byte {
 		return nil
 	}
 	return buff.Bytes()
+}
+
+func FileExsit(fileAddr string) bool {
+	if _, err := os.Stat(fileAddr); os.IsNotExist(err) {
+		return false
+	}
+	return true
+}
+
+func Handle(err error) {
+	if err != nil {
+		log.Println("Error :", err)
+	}
 }
